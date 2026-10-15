@@ -20,6 +20,8 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import java.net.Inet4Address
+import java.net.NetworkInterface
 import java.util.Locale
 
 class MainActivity : Activity() {
@@ -39,6 +41,7 @@ class MainActivity : Activity() {
     private var connModeWifi = false
     private var nsdManager: NsdManager? = null
     private var discoveryListener: NsdManager.DiscoveryListener? = null
+    private var failCount = 0            // 连续连接失败次数（用于自动切换 USB/WiFi）
 
     // 灵敏度当前值（内存态，变化即写入 touchpad 并持久化）
     private var moveSens = 1.0f
@@ -149,6 +152,7 @@ class MainActivity : Activity() {
         // 连接状态监听
         ConnectionManager.listener = object : ConnectionManager.Listener {
             override fun onConnected() {
+                failCount = 0
                 runOnUiThread {
                     touchpad.statusText = if (isChinese) "● 已连接 Mac 触控板" else "● Connected to Mac trackpad"
                 }
@@ -160,6 +164,11 @@ class MainActivity : Activity() {
                         "○ 连接断开，正在重连…（检查 adb reverse 是否生效）"
                     else
                         "○ Disconnected, reconnecting… (check adb reverse)"
+                    // 连续失败到阈值：自动尝试另一种连接方式（USB ↔ WiFi）
+                    failCount++
+                    if (failCount >= 4) {
+                        autoSwitchMode()
+                    }
                 }
             }
         }
@@ -376,8 +385,9 @@ class MainActivity : Activity() {
         connModeWifi = wifi
         prefs.edit().putBoolean("wifi_mode", wifi).apply()
         if (wifi) {
+            fillWifiHint()                              // 自动填充同网段 IP 前缀
             val ip = wifiInput.text.toString().trim()
-            if (ip.isNotEmpty()) {
+            if (ip.isNotEmpty() && !ip.endsWith(".")) {
                 connectWifi(ip)
             } else {
                 ConnectionManager.setTarget("127.0.0.1")   // 先断开 USB
@@ -387,6 +397,70 @@ class MainActivity : Activity() {
             ConnectionManager.setTarget("127.0.0.1")
         }
         updateConnModeUi()
+    }
+
+    /**
+     * WiFi 模式下自动填充 Mac 地址：取手机当前 WiFi IP（如 192.168.68.80）
+     * 去掉最后一段 → "192.168.68."，Mac 通常同网段，用户只需补最后一位。
+     */
+    private fun fillWifiHint() {
+        if (wifiInput.text.isNotEmpty()) return   // 已有输入则不覆盖
+        val ip = getLocalWifiIp() ?: return
+        val prefix = ip.substringBeforeLast('.') + "."
+        wifiInput.setText(prefix)
+        wifiInput.setSelection(prefix.length)
+    }
+
+    /** 获取手机当前 WiFi 的局域网 IPv4（优先 192.168/10/172 网段） */
+    private fun getLocalWifiIp(): String? {
+        return try {
+            NetworkInterface.getNetworkInterfaces()?.toList()?.forEach { ni ->
+                if (ni.isUp && !ni.isLoopback) {
+                    ni.inetAddresses?.toList()?.forEach { a ->
+                        if (a is Inet4Address) {
+                            val ip = a.hostAddress ?: return@forEach
+                            if (ip.startsWith("192.168.") || ip.startsWith("10.") ||
+                                ip.startsWith("172.")) {
+                                return ip
+                            }
+                        }
+                    }
+                }
+            }
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** 连续失败自动切换连接方式（USB 失败试 WiFi，WiFi 失败回 USB） */
+    private fun autoSwitchMode() {
+        failCount = 0
+        if (connModeWifi) {
+            // WiFi 连不上 → 切回 USB
+            setConnMode(false)
+            touchpad.statusText = if (isChinese)
+                "↺ WiFi 未连上，已自动切回 USB 模式…"
+            else
+                "↺ WiFi failed, switched back to USB…"
+        } else {
+            // USB 连不上 → 尝试 WiFi（自动填充 + 自动发现）
+            connModeWifi = true
+            prefs.edit().putBoolean("wifi_mode", true).apply()
+            fillWifiHint()
+            val ip = wifiInput.text.toString().trim()
+            if (ip.isNotEmpty() && !ip.endsWith(".")) {
+                connectWifi(ip)
+            } else {
+                ConnectionManager.setTarget("127.0.0.1")
+                startAutoDiscover()
+            }
+            updateConnModeUi()
+            touchpad.statusText = if (isChinese)
+                "↺ USB 未连上，正在尝试 WiFi 连接…"
+            else
+                "↺ USB failed, trying WiFi…"
+        }
     }
 
     /** 以指定 IP 连接 Mac（WiFi） */

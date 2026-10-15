@@ -71,7 +71,8 @@ class TouchpadView @JvmOverloads constructor(
     // ---- 单指 / 双指状态 ----
     private var pressStart = 0L
     private var buttonDown = false            // 单指长按后左键已按下
-    private var rightClickPending = false     // 双指轻点候选
+    private var rightClickPending = false     // 双指轻点候选（两指未移动、短按 → 右键）
+    private var twoScrolled = false           // 本次双指手势是否已滚动（滚动收尾不触发单击）
     private var twoTapPending = false         // 双指阶段尚未移动
     private var twoMoveDist = 0f
     private var lastMidX: Float? = null
@@ -205,6 +206,7 @@ class TouchpadView @JvmOverloads constructor(
         multiClassified = MultiClassify.NONE
         multiFirstMoveTime = 0L
         rightClickPending = false
+        twoScrolled = false
         twoTapPending = false
         lastMidX = null; lastMidY = null
         resetSingleBase()
@@ -250,7 +252,8 @@ class TouchpadView @JvmOverloads constructor(
                     twoTapPending = true
                     twoMoveDist = 0f
                     lastMidX = null; lastMidY = null
-                    rightClickPending = false
+                    rightClickPending = true      // 双指轻点候选：未移动且短按 → 右键
+                    twoScrolled = false
                     resetAllPointerBases()
                 }
             }
@@ -283,8 +286,9 @@ class TouchpadView @JvmOverloads constructor(
             pointers.size == 1 -> {
                 mode = Mode.SINGLE
                 resetSingleBase()
+                // 保留 rightClickPending：若双指未移动、短按抬起 → 在 ACTION_UP 时发右键
+                // 若剩余手指随后移动，handleOneMove 会取消右键候选
                 twoTapPending = false
-                rightClickPending = false
             }
         }
     }
@@ -349,9 +353,15 @@ class TouchpadView @JvmOverloads constructor(
     private fun dispatchSingleOrTwo() {
         val now = SystemClock.uptimeMillis()
         if (rightClickPending) {
+            // 双指轻点（两指未移动、短按）→ 右键
             rightClickPending = false
             ConnectionManager.send(Protocol.rightDown())
             ConnectionManager.send(Protocol.rightUp())
+            return
+        }
+        // 双指滚动收尾：不触发单击，避免滚完页面误点
+        if (twoScrolled) {
+            twoScrolled = false
             return
         }
         if (mode == Mode.SINGLE) {
@@ -450,6 +460,8 @@ class TouchpadView @JvmOverloads constructor(
         twoMoveDist += abs(dx) + abs(dy)
         if (twoMoveDist < scrollStartSlop) return
         twoTapPending = false
+        rightClickPending = false   // 已滚动，不再是右键轻点
+        twoScrolled = true          // 本次手势滚动过：收尾不触发单击
         ConnectionManager.sendScrollThrottled(
             (dx * scrollSensitivity).toInt(), (-dy * scrollSensitivity).toInt()
         )
@@ -589,6 +601,7 @@ class TouchpadView @JvmOverloads constructor(
         mode = Mode.IDLE
         rightClickPending = false
         twoTapPending = false
+        twoScrolled = false
         multiActive = false
         multiMaxFingers = 0
         multiClassified = MultiClassify.NONE

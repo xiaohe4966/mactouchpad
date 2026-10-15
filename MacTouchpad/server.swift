@@ -374,6 +374,9 @@ final class Server {
             print("DEBUG 收到 GESTURE id=\(payload[1])")
             mover.flush()
             handleGesture(Int8(bitPattern: payload[1]))
+        case 0x00:
+            // 保活包：App 空闲时每 5 秒发送一次，确认连接存活；静默忽略
+            break
         default:
             print("DEBUG 收到未知消息 type=\(type)")
         }

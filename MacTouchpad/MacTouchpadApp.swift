@@ -26,6 +26,7 @@ import AppKit
 import CoreGraphics
 import ApplicationServices
 import Network
+import ServiceManagement
 
 // MARK: - 协议常量
 
@@ -394,8 +395,88 @@ final class Server {
             log("收到 GESTURE id=\(payload[1])")
             mover.flush()
             handleGesture(Int8(bitPattern: payload[1]))
+        case 0x00:
+            // 保活包：App 空闲时每 5 秒发送一次，确认连接存活；静默忽略
+            break
         default:
             log("收到未知消息 type=\(type)")
+        }
+    }
+}
+
+// MARK: - USB reverse 自动守护（拔线重插后自动恢复 adb reverse）
+
+final class ReverseWatchdog {
+
+    private let queue = DispatchQueue(label: "mactouchpad.reverse")
+    private var timer: DispatchSourceTimer?
+    private var running = false
+    private let adbPath: String?
+
+    init() {
+        adbPath = ReverseWatchdog.findAdb()
+    }
+
+    /// 常见 adb 安装路径
+    static func findAdb() -> String? {
+        let candidates = [
+            NSHomeDirectory() + "/Library/Android/sdk/platform-tools/adb",
+            "/opt/homebrew/bin/adb",
+            "/usr/local/bin/adb",
+            "/opt/android-sdk/platform-tools/adb"
+        ]
+        for c in candidates where FileManager.default.isExecutableFile(atPath: c) {
+            return c
+        }
+        return nil
+    }
+
+    func start() {
+        guard let adb = adbPath else {
+            log("⚠️ 未找到 adb，USB 自动恢复不可用。手动执行：adb reverse tcp:5907 tcp:5907")
+            return
+        }
+        log("🔁 USB 守护已启动（\(adb)）：拔线重插后自动重建 reverse")
+        queue.async { [self] in
+            guard !self.running else { return }
+            self.running = true
+            let t = DispatchSource.makeTimerSource(queue: self.queue)
+            t.schedule(deadline: .now() + 2, repeating: .seconds(2))
+            t.setEventHandler { [weak self] in self?.check(adb) }
+            t.resume()
+            self.timer = t
+        }
+    }
+
+    /// 手机在线但 reverse 缺失 → 自动重建
+    private func check(_ adb: String) {
+        guard let devOut = run("\(adb) devices"), !devOut.isEmpty else { return }
+        let online = devOut.components(separatedBy: "\n")
+            .dropFirst()
+            .contains { $0.contains("\tdevice") }
+        if !online { return }
+
+        guard let revOut = run("\(adb) reverse --list") else { return }
+        if revOut.contains("tcp:5907") { return }
+
+        log("🔁 检测到 USB 已重连但 reverse 缺失，自动重建…")
+        _ = run("\(adb) reverse tcp:5907 tcp:5907")
+    }
+
+    private func run(_ cmd: String) -> String? {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/bash")
+        p.arguments = ["-lc", cmd]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = pipe
+        do {
+            try p.run()
+            p.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            return String(data: data, encoding: .utf8)
+        } catch {
+            return nil
         }
     }
 }
@@ -410,7 +491,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var clientLabel: NSTextField!
     private var permLabel: NSTextField!
     private var permBtn: NSButton!
+    private var launchCheckbox: NSButton!
     private let server = Server()
+    private let watchdog = ReverseWatchdog()
     private var permTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -422,6 +505,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         server.start()
+        watchdog.start()
         startPermissionMonitor()
         // 初始权限状态
         updatePermission()
@@ -456,23 +540,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         content.addSubview(title)
 
         statusLabel = label(340, 13, false)
+        statusLabel.isSelectable = true   // IP 可选中复制，方便填到手机
         content.addSubview(statusLabel)
 
         clientLabel = label(316, 13, false)
         content.addSubview(clientLabel)
 
-        permLabel = label(288, 13, false)
+        permLabel = label(290, 13, false)
         content.addSubview(permLabel)
 
-        permBtn = NSButton(frame: NSRect(x: 18, y: 258, width: 220, height: 26))
+        permBtn = NSButton(frame: NSRect(x: 18, y: 262, width: 220, height: 26))
         permBtn.title = "打开「辅助功能」设置"
         permBtn.bezelStyle = .rounded
         permBtn.target = self
         permBtn.action = #selector(openPermissionSettings)
         content.addSubview(permBtn)
 
+        launchCheckbox = NSButton(checkboxWithTitle: "开机自动启动（可随时取消）",
+                                  target: self, action: #selector(toggleLaunchAtLogin))
+        launchCheckbox.frame = NSRect(x: 18, y: 232, width: 240, height: 22)
+        launchCheckbox.state = isLaunchAtLogin() ? .on : .off
+        content.addSubview(launchCheckbox)
+
         // 日志区
-        let scroll = NSScrollView(frame: NSRect(x: 18, y: 14, width: 424, height: 228))
+        let scroll = NSScrollView(frame: NSRect(x: 18, y: 14, width: 424, height: 205))
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.borderType = .bezelBorder
@@ -519,6 +610,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openPermissionSettings() {
         NSWorkspace.shared.open(URL(
             string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+    }
+
+    // ============================================================ 开机自启
+
+    /// 当前是否已注册开机自启
+    private func isLaunchAtLogin() -> Bool {
+        if #available(macOS 13.0, *) {
+            return SMAppService.mainApp.status == .enabled
+        } else {
+            return FileManager.default.fileExists(
+                atPath: legacyLaunchAgentURL()?.path ?? "")
+        }
+    }
+
+    @objc private func toggleLaunchAtLogin() {
+        let on = launchCheckbox.state == .on
+        if #available(macOS 13.0, *) {
+            do {
+                if on {
+                    try SMAppService.mainApp.register()
+                    log("✅ 已开启开机自动启动")
+                } else {
+                    try SMAppService.mainApp.unregister()
+                    log("已取消开机自动启动")
+                }
+            } catch {
+                log("⚠️ 设置开机自启失败：\(error.localizedDescription)")
+                launchCheckbox.state = isLaunchAtLogin() ? .on : .off
+            }
+        } else {
+            writeLegacyLaunchAgent(on)
+        }
+    }
+
+    /// macOS 12 及以下：写入 ~/Library/LaunchAgents/com.mactouchpad.server.plist
+    private func legacyLaunchAgentURL() -> URL? {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents/com.mactouchpad.server.plist")
+    }
+
+    private func writeLegacyLaunchAgent(_ on: Bool) {
+        guard let url = legacyLaunchAgentURL() else { return }
+        if on {
+            let exe = Bundle.main.bundlePath + "/Contents/MacOS/MacTouchpad"
+            let plist = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+                <key>Label</key><string>com.mactouchpad.server</string>
+                <key>ProgramArguments</key>
+                <array><string>\(exe)</string></array>
+                <key>RunAtLoad</key><true/>
+            </dict>
+            </plist>
+            """
+            try? FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? plist.write(to: url, atomically: true, encoding: .utf8)
+            log("✅ 已开启开机自动启动（LaunchAgent）")
+        } else {
+            try? FileManager.default.removeItem(at: url)
+            log("已取消开机自动启动（LaunchAgent）")
+        }
     }
 
     private func appendLog(_ s: String) {
