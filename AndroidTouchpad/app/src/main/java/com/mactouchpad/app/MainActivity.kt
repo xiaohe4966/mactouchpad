@@ -3,6 +3,7 @@ package com.mactouchpad.app
 import android.app.Activity
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
@@ -15,7 +16,8 @@ import android.widget.TextView
 
 class MainActivity : Activity() {
 
-    private lateinit var statusView: TextView
+    private lateinit var rotationBtn: TextView
+    private lateinit var touchpad: TouchpadView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -23,22 +25,40 @@ class MainActivity : Activity() {
         // 全屏沉浸 + 保持屏幕常亮
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        val touchpad = TouchpadView(this)
+        touchpad = TouchpadView(this)
+        // 顶栏连接状态文字由 TouchpadView 自己画，跟着旋转一起转
+        touchpad.statusText = "正在连接 Mac…（USB 连接后执行 adb reverse tcp:5907 tcp:5907）"
 
-        statusView = TextView(this).apply {
-            text = "正在连接 Mac…（USB 连接后执行 adb reverse tcp:5907 tcp:5907）"
-            setTextColor(Color.argb(200, 255, 255, 255))
-            textSize = 14f
+        // 左上角小按钮：循环切换 0° / 90° / 180° / 270°，让不同握持方向下手感都自然
+        rotationBtn = TextView(this).apply {
+            text = "0°"
+            setTextColor(Color.argb(220, 255, 255, 255))
+            textSize = 13f
             typeface = Typeface.MONOSPACE
-            setPadding(dp(24), dp(20), dp(24), dp(20))
+            gravity = Gravity.CENTER
+            isClickable = true
+            isFocusable = true
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.argb(140, 30, 30, 30))
+                setStroke(dp(1), Color.argb(120, 255, 255, 255))
+            }
+            setOnClickListener {
+                val next = (touchpad.rotationDegrees + 90) % 360
+                touchpad.setRotationDegrees(next)
+                updateRotationBtnText()
+            }
         }
+        updateRotationBtnText()
 
         val root = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
             addView(touchpad, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-            addView(statusView, FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL))
+            addView(rotationBtn, FrameLayout.LayoutParams(
+                dp(48), dp(48), Gravity.TOP or Gravity.START).apply {
+                setMargins(dp(16), dp(16), 0, 0)
+            })
         }
         setContentView(root)
 
@@ -48,11 +68,11 @@ class MainActivity : Activity() {
         // 连接状态监听
         ConnectionManager.listener = object : ConnectionManager.Listener {
             override fun onConnected() {
-                runOnUiThread { statusView.text = "● 已连接 Mac 触控板" }
+                runOnUiThread { touchpad.statusText = "● 已连接 Mac 触控板" }
             }
 
             override fun onDisconnected() {
-                runOnUiThread { statusView.text = "○ 连接断开，正在重连…（检查 adb reverse 是否生效）" }
+                runOnUiThread { touchpad.statusText = "○ 连接断开，正在重连…（检查 adb reverse 是否生效）" }
             }
         }
         ConnectionManager.start()
@@ -92,6 +112,10 @@ class MainActivity : Activity() {
                         or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
                         or View.SYSTEM_UI_FLAG_LAYOUT_STABLE)
         }
+    }
+
+    private fun updateRotationBtnText() {
+        rotationBtn.text = "${touchpad.rotationDegrees}°"
     }
 
     private fun dp(v: Int): Int =
