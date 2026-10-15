@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+
+# Android / Gradle
+AndroidTouchpad/.gradle/
+AndroidTouchpad/app/build/
+AndroidTouchpad/local.properties
+AndroidTouchpad/.idea/
+AndroidTouchpad/*.iml
+AndroidTouchpad/captures/
+
+# 编译产物
+MacTouchpad/touchpad-server
+
+# 日志
+*.log
