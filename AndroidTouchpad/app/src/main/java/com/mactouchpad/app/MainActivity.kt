@@ -3,9 +3,12 @@ package com.mactouchpad.app
 import android.app.Activity
 import android.graphics.Color
 import android.graphics.Typeface
+import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
@@ -19,7 +22,6 @@ class MainActivity : Activity() {
 
         // 全屏沉浸 + 保持屏幕常亮
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        hideSystemUi()
 
         val touchpad = TouchpadView(this)
 
@@ -39,6 +41,9 @@ class MainActivity : Activity() {
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL))
         }
         setContentView(root)
+
+        // 沉浸式全屏（必须在 setContentView 之后，insetsController 才可用）
+        hideSystemUi()
 
         // 连接状态监听
         ConnectionManager.listener = object : ConnectionManager.Listener {
@@ -64,14 +69,29 @@ class MainActivity : Activity() {
         if (hasFocus) hideSystemUi()
     }
 
+    /**
+     * 沉浸式全屏：隐藏状态栏与导航栏。
+     * 说明：安卓系统不允许普通 App 完全禁止「下拉通知栏」手势（系统级安全机制），
+     * 沉浸模式下从顶部下拉只会短暂显示系统栏、数秒后自动隐藏，不影响触控板使用。
+     */
     private fun hideSystemUi() {
-        window.decorView.systemUiVisibility =
-            (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                    or View.SYSTEM_UI_FLAG_FULLSCREEN
-                    or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                    or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                    or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                    or View.SYSTEM_UI_FLAG_LAYOUT_STABLE)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Android 11+：现代 WindowInsetsController
+            window.setDecorFitsSystemWindows(false)
+            window.insetsController?.let { c ->
+                c.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+                c.systemBarsBehavior =
+                    WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        } else {
+            window.decorView.systemUiVisibility =
+                (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        or View.SYSTEM_UI_FLAG_FULLSCREEN
+                        or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        or View.SYSTEM_UI_FLAG_LAYOUT_STABLE)
+        }
     }
 
     private fun dp(v: Int): Int =
