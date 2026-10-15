@@ -1,5 +1,8 @@
 package com.mactouchpad.app
 
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import java.io.DataOutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -7,7 +10,6 @@ import java.net.SocketTimeoutException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
-import android.util.Log
 
 /**
  * 触控板数据连接：TCP 客户端。
@@ -55,6 +57,59 @@ object ConnectionManager {
      */
     private val sendExecutor: ExecutorService = Executors.newSingleThreadExecutor { r ->
         Thread(r, "MacTouchpad-Sender").apply { isDaemon = true }
+    }
+
+    // ---- 增量节流：MOVE / SCROLL 高频合并成包，WiFi 下显著降低包数量与卡顿 ----
+    private val throttleHandler = Handler(Looper.getMainLooper())
+    private val THROTTLE_MS = 14L
+    @Volatile private var pendingMoveX = 0
+    @Volatile private var pendingMoveY = 0
+    @Volatile private var pendingScrollX = 0
+    @Volatile private var pendingScrollY = 0
+    @Volatile private var flushPosted = false
+
+    /** 移动增量：先累积，按固定间隔合并成一个 MOVE 包发出 */
+    fun sendMoveThrottled(dx: Int, dy: Int) {
+        synchronized(lock) {
+            pendingMoveX += dx
+            pendingMoveY += dy
+        }
+        scheduleFlush()
+    }
+
+    /** 滚动增量：先累积，按固定间隔合并成一个 SCROLL 包发出 */
+    fun sendScrollThrottled(dx: Int, dy: Int) {
+        synchronized(lock) {
+            pendingScrollX += dx
+            pendingScrollY += dy
+        }
+        scheduleFlush()
+    }
+
+    private fun scheduleFlush() {
+        if (flushPosted) return
+        flushPosted = true
+        throttleHandler.postDelayed({
+            flushPosted = false
+            // 网络写入必须在后台发送线程执行
+            sendExecutor.execute { flushThrottled() }
+        }, THROTTLE_MS)
+    }
+
+    /** 把累积的移动 / 滚动增量合并发出。必须在后台发送线程调用。 */
+    private fun flushThrottled() {
+        synchronized(lock) {
+            val mx = pendingMoveX; val my = pendingMoveY
+            val sx = pendingScrollX; val sy = pendingScrollY
+            pendingMoveX = 0; pendingMoveY = 0
+            pendingScrollX = 0; pendingScrollY = 0
+            if ((mx != 0 || my != 0) && out != null) {
+                sendOnThread(Protocol.move(mx, my))
+            }
+            if ((sx != 0 || sy != 0) && out != null) {
+                sendOnThread(Protocol.scroll(sx, sy))
+            }
+        }
     }
 
     fun start() {
@@ -107,9 +162,13 @@ object ConnectionManager {
 
     /**
      * 触摸事件发送：异步提交到后台发送线程，避免主线程网络操作。
+     * 发送关键消息（DOWN / UP / 手势）前先 flush 累积的移动增量，保证顺序与拖拽完整性。
      */
     fun send(bytes: ByteArray) {
-        sendExecutor.execute { sendOnThread(bytes) }
+        sendExecutor.execute {
+            flushThrottled()
+            sendOnThread(bytes)
+        }
     }
 
     /** 必须在后台线程调用。写失败说明底层 socket 已死：立即清理并通知重连 */

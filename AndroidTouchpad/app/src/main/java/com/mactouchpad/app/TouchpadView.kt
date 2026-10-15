@@ -418,8 +418,9 @@ class TouchpadView @JvmOverloads constructor(
         p.moved += abs(dx) + abs(dy)
         if (p.moved < clickSlop) return
         if (rightClickPending) rightClickPending = false
-        ConnectionManager.send(
-            Protocol.move((dx * moveSensitivity).toInt(), (dy * moveSensitivity).toInt())
+        // 增量节流发送：高频移动合并成包，WiFi 下更顺滑
+        ConnectionManager.sendMoveThrottled(
+            (dx * moveSensitivity).toInt(), (dy * moveSensitivity).toInt()
         )
     }
 
@@ -449,8 +450,8 @@ class TouchpadView @JvmOverloads constructor(
         twoMoveDist += abs(dx) + abs(dy)
         if (twoMoveDist < scrollStartSlop) return
         twoTapPending = false
-        ConnectionManager.send(
-            Protocol.scroll((dx * scrollSensitivity).toInt(), (-dy * scrollSensitivity).toInt())
+        ConnectionManager.sendScrollThrottled(
+            (dx * scrollSensitivity).toInt(), (-dy * scrollSensitivity).toInt()
         )
     }
 
@@ -497,8 +498,8 @@ class TouchpadView @JvmOverloads constructor(
                 val dx = cx - multiLastX
                 val dy = cy - multiLastY
                 if (abs(dx) > 0.5f || abs(dy) > 0.5f) {
-                    ConnectionManager.send(
-                        Protocol.move((dx * multiMoveScale).toInt(), (dy * multiMoveScale).toInt())
+                    ConnectionManager.sendMoveThrottled(
+                        (dx * multiMoveScale).toInt(), (dy * multiMoveScale).toInt()
                     )
                 }
             }
