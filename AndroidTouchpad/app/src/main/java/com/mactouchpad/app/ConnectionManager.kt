@@ -10,14 +10,24 @@ import java.util.concurrent.atomic.AtomicBoolean
 import android.util.Log
 
 /**
- * 触控板数据连接：TCP 客户端，固定连接 127.0.0.1:5907。
- * 通过 USB 数据线 + `adb reverse tcp:5907 tcp:5907` 转发到 Mac 本机端口。
- * 断线后自动每 2 秒重连。
+ * 触控板数据连接：TCP 客户端。
+ *  - USB 模式：连接 127.0.0.1:5907，通过 `adb reverse tcp:5907 tcp:5907` 转发到 Mac 本机。
+ *  - WiFi 模式：直接连接 Mac 局域网 IP:5907（服务端已监听所有网卡 + Bonjour 广播）。
+ * 断线后自动每 2 秒重连（用当前 targetHost / targetPort）。
  */
 object ConnectionManager {
 
-    const val HOST = "127.0.0.1"
-    const val PORT = 5907
+    /** 当前连接目标：USB 模式默认 127.0.0.1，WiFi 模式为 Mac 局域网 IP */
+    @Volatile var targetHost: String = "127.0.0.1"
+    @Volatile var targetPort: Int = 5907
+
+    /** 切换连接目标（会立即断开当前连接，重连循环将使用新地址） */
+    fun setTarget(host: String, port: Int = 5907) {
+        if (targetHost == host && targetPort == port) return
+        targetHost = host
+        targetPort = port
+        closeSocket()
+    }
 
     /** 保活消息（服务端忽略），用于检测假死连接 */
     private val MSG_KEEPALIVE = byteArrayOf(0x00)
@@ -55,7 +65,7 @@ object ConnectionManager {
                 try {
                     val s = Socket()
                     s.tcpNoDelay = true
-                    s.connect(InetSocketAddress(HOST, PORT), 2000)
+                    s.connect(InetSocketAddress(targetHost, targetPort), 2000)
                     // 读超时：服务端是纯单向通道，read 正常会一直阻塞。
                     // 超时说明通道无数据（正常态），趁机发一次保活验证连接是否还活着。
                     s.soTimeout = READ_TIMEOUT_MS

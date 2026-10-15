@@ -12,8 +12,11 @@ import android.util.TypedValue
 import android.graphics.Matrix
 import android.view.MotionEvent
 import android.view.View
+import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.sin
 
 /**
  * 全屏触控板视图：把整个屏幕当作 Mac 触控板。
@@ -41,10 +44,10 @@ class TouchpadView @JvmOverloads constructor(
     defStyleAttr: Int = 0
 ) : View(context, attrs, defStyleAttr) {
 
-    // ---- 灵敏度 / 阈值（可按手感调整） ----
-    private val moveSensitivity = 1.6f       // 单指移动 → 指针位移倍数
-    private val multiMoveScale = 1.6f        // 三指拖拽（centroid 移动）→ 指针位移倍数
-    private val scrollSensitivity = 0.7f     // 双指移动 → 滚动倍数
+    // ---- 灵敏度 / 阈值（可由手机上的设置面板微调） ----
+    var moveSensitivity = 1.0f       // 单指移动 → 指针位移倍数（默认 1.0）
+    var multiMoveScale = 1.6f        // 三指拖拽（centroid 移动）→ 指针位移倍数
+    var scrollSensitivity = 0.7f     // 双指移动 → 滚动倍数
     private val clickSlop = dp(8f)           // 点击判定最大位移（超过视为移动）
     private val scrollStartSlop = dp(6f)     // 双指开始滚动所需累计位移
     private val gestureSlop = dp(50f)        // 多指手势判定最小滑动距离
@@ -125,8 +128,16 @@ class TouchpadView @JvmOverloads constructor(
         isAntiAlias = true
     }
 
-    private val hintText =
-        "单指·移动/单击    长按·拖拽    双指·滚动/右键    三指慢拖·拖窗口    三指快滑·调度中心/桌面    四指·启动台/桌面"
+    /** 系统语言是否为中文（用于界面文字自动切换） */
+    private val isChinese: Boolean =
+        Locale.getDefault().language.startsWith("zh") ||
+            resources.configuration.locales[0].language.startsWith("zh")
+
+    private val hintText: String
+        get() = if (isChinese)
+            "单指·移动/单击    长按·拖拽    双指·滚动/右键    三指慢拖·拖窗口    三指快滑·调度中心/桌面    四指·启动台/桌面"
+        else
+            "1F·Move/Click    Hold·Drag    2F·Scroll/Right    3F Slow·Drag Win    3F Quick·Mission/Desk    4F·Launchpad/Desktop"
 
     /** 连接状态文字（顶栏），由 MainActivity 在连接 / 断开时更新 */
     var statusText: String = ""
@@ -596,11 +607,22 @@ class TouchpadView @JvmOverloads constructor(
             canvas.drawText(hintText, cx, height - dp(22f), hintPaint)
             canvas.drawText(statusText, cx, dp(28f), statusPaint)
         } else {
-            // 跟着旋转角度画两行字：顶部状态条 + 底部 hint。
-            //   drawTextRotated 内置自适应缩放：旋转 90°/270° 时文字宽度变成竖直方向，
-            //   超出 view 高度就按比例缩小，避免被 view 边界裁掉。
-            drawTextRotated(canvas, hintText, hintPaint, cx, height - dp(22f))
-            drawTextRotated(canvas, statusText, statusPaint, cx, dp(28f))
+            // 跟着旋转角度画两行字，但旋转后依然保持"视觉居中"：
+            //   文字目标位置 = 旋转后屏幕的底部中央（hint）/ 顶部中央（status）。
+            //   先把目标锚点逆旋转到当前绘制坐标系，再交给 drawTextRotated 旋转回目标位置。
+            //   drawTextRotated 内置自适应缩放：90°/270° 时文字宽度变成竖直方向，超出 view 高度按比例缩小。
+            val theta = Math.toRadians(rotationDegrees.toDouble())
+            val s = sin(theta).toFloat()
+            val c = cos(theta).toFloat()
+            val cy = height / 2f
+
+            val hintTargetY = height - dp(22f)
+            drawTextRotated(canvas, hintText, hintPaint,
+                cx + (hintTargetY - cy) * s, cy + (hintTargetY - cy) * c)
+
+            val statusTargetY = dp(28f)
+            drawTextRotated(canvas, statusText, statusPaint,
+                cx + (statusTargetY - cy) * s, cy + (statusTargetY - cy) * c)
         }
     }
 

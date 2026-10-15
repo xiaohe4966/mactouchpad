@@ -152,6 +152,8 @@ final class Server {
     func start() {
         do {
             listener = try NWListener(using: .tcp, on: SERVER_PORT)
+            // 注册 Bonjour 服务：手机 App 可通过 mDNS 自动发现本机（_mactouchpad._tcp）
+            listener?.service = NWListener.Service(name: nil, type: "_mactouchpad._tcp")
         } catch {
             print("❌ 无法监听端口 \(SERVER_PORT)：\(error)")
             exit(1)
@@ -160,8 +162,37 @@ final class Server {
             self?.accept(conn)
         }
         listener?.start(queue: queue)
-        print("✅ MacTouchpad 服务已启动，监听端口 \(SERVER_PORT)")
-        print("   手机 USB 连接后，在 Mac 终端执行：adb reverse tcp:\(SERVER_PORT) tcp:\(SERVER_PORT)")
+        print("✅ MacTouchpad 服务已启动，监听端口 \(SERVER_PORT)（USB / WiFi 均可连接）")
+        if let ip = localIPAddress() {
+            print("   WiFi 连接：手机 App 设置里选「WiFi」，输入 Mac 地址 \(ip):\(SERVER_PORT)（或点自动发现）")
+        }
+        print("   USB 连接：adb reverse tcp:\(SERVER_PORT) tcp:\(SERVER_PORT)")
+    }
+
+    /// 获取本机局域网 IPv4 地址（en 开头接口，排除回环）
+    private func localIPAddress() -> String? {
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
+        defer { freeifaddrs(ifaddr) }
+        for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let flags = Int32(ptr.pointee.ifa_flags)
+            var addr = ptr.pointee.ifa_addr.pointee
+            if (flags & (IFF_UP | IFF_RUNNING)) == (IFF_UP | IFF_RUNNING),
+               addr.sa_family == UInt8(AF_INET) {
+                let name = String(cString: ptr.pointee.ifa_name)
+                if name.hasPrefix("en") {
+                    var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                    if getnameinfo(&addr, socklen_t(addr.sa_len), &host, socklen_t(host.count),
+                                  nil, 0, NI_NUMERICHOST) == 0 {
+                        let ip = String(cString: host)
+                        if !ip.hasPrefix("127.") {
+                            return ip
+                        }
+                    }
+                }
+            }
+        }
+        return nil
     }
 
     private func accept(_ conn: NWConnection) {
@@ -176,7 +207,11 @@ final class Server {
         conn.stateUpdateHandler = { [weak self] state in
             switch state {
             case .ready:
-                print("📱 已连接客户端（触控板就绪）")
+                if case .hostPort(let host, let port) = conn.endpoint {
+                    print("📱 已连接客户端（\(host):\(port)）")
+                } else {
+                    print("📱 已连接客户端（触控板就绪）")
+                }
             case .failed(let err):
                 print("连接结束：\(err.localizedDescription)")
                 if self?.current === conn { self?.current = nil }
