@@ -28,6 +28,7 @@ object Protocol {
     const val GESTURE_SWITCH_LEFT = 2     // 三指左滑 → 上一桌面
     const val GESTURE_SWITCH_RIGHT = 3    // 三指右滑 → 下一桌面
     const val GESTURE_SHOW_DESKTOP = 4    // 三指下滑 → 显示桌面
+    const val GESTURE_LAUNCHPAD = 5       // 四指上滑 → 启动台
 
     fun move(dx: Int, dy: Int): ByteArray =
         encode(MSG_MOVE) {

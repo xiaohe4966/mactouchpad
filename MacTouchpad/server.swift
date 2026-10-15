@@ -19,12 +19,13 @@
 //    0x04 RIGHT_DOWN  （无载荷）
 //    0x05 RIGHT_UP    （无载荷）
 //    0x06 SCROLL      int16 dx, int16 dy     dy>0 = 手指下滑（内容向下）
-//    0x07 GESTURE     int8 id                1=调度中心 2=上一桌面 3=下一桌面 4=显示桌面
+//    0x07 GESTURE     int8 id                1=调度中心 2=上一桌面 3=下一桌面 4=显示桌面 5=启动台
 //
 
 import Foundation
 import CoreGraphics
 import ApplicationServices
+import AppKit
 import Network
 
 // MARK: - 协议常量
@@ -37,10 +38,11 @@ let MSG_RIGHT_UP: UInt8 = 5
 let MSG_SCROLL: UInt8 = 6
 let MSG_GESTURE: UInt8 = 7
 
-let GESTURE_MISSION_CONTROL: Int8 = 1  // 三指上滑
-let GESTURE_SWITCH_LEFT: Int8 = 2      // 三指左滑
-let GESTURE_SWITCH_RIGHT: Int8 = 3     // 三指右滑
-let GESTURE_SHOW_DESKTOP: Int8 = 4     // 三指下滑
+let GESTURE_MISSION_CONTROL: Int8 = 1  // 三指上滑 → 调度中心
+let GESTURE_SWITCH_LEFT: Int8 = 2      // 三指左滑 → 上一桌面
+let GESTURE_SWITCH_RIGHT: Int8 = 3     // 三指右滑 → 下一桌面
+let GESTURE_SHOW_DESKTOP: Int8 = 4     // 三指下滑 → 显示桌面
+let GESTURE_LAUNCHPAD: Int8 = 5        // 四指上滑 → 启动台
 
 let SERVER_PORT: NWEndpoint.Port = 5907
 
@@ -93,13 +95,21 @@ enum Mouse {
     static func rightClick() { rightDown(); rightUp() }
 }
 
-// MARK: - 手势快捷键（三指滑动无法直接模拟，映射为系统级快捷键）
+// MARK: - 手势快捷键（三指/四指滑动无法直接模拟，映射为系统级快捷键）
 
 let kVK_Control: CGKeyCode = 0x3B  // left Control
 let kVK_Up: CGKeyCode    = 0x7E
 let kVK_Down: CGKeyCode  = 0x7D
 let kVK_Left: CGKeyCode  = 0x7B
 let kVK_Right: CGKeyCode = 0x7C
+let kVK_F3: CGKeyCode    = 0x63   // 调度中心（Mission Control）默认快捷键
+let kVK_F11: CGKeyCode   = 0x67   // 显示桌面（Show Desktop）默认快捷键
+
+func postKey(_ key: CGKeyCode) {
+    guard let src = CGEventSource(stateID: .hidSystemState) else { return }
+    CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: true)?.post(tap: .cghidEventTap)
+    CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: false)?.post(tap: .cghidEventTap)
+}
 
 func postKeyboardShortcut(_ key: CGKeyCode) {
     guard let src = CGEventSource(stateID: .hidSystemState) else { return }
@@ -117,10 +127,15 @@ func postKeyboardShortcut(_ key: CGKeyCode) {
 
 func handleGesture(_ id: Int8) {
     switch id {
-    case GESTURE_MISSION_CONTROL: postKeyboardShortcut(kVK_Up)     // Ctrl+↑ 调度中心
-    case GESTURE_SHOW_DESKTOP:    postKeyboardShortcut(kVK_Down)   // Ctrl+↓ 显示桌面
-    case GESTURE_SWITCH_LEFT:     postKeyboardShortcut(kVK_Left)   // Ctrl+← 上一桌面/全屏
-    case GESTURE_SWITCH_RIGHT:    postKeyboardShortcut(kVK_Right)  // Ctrl+→ 下一桌面/全屏
+    case GESTURE_MISSION_CONTROL: postKey(kVK_F3)                // 调度中心
+    case GESTURE_SHOW_DESKTOP:    postKey(kVK_F11)               // 显示桌面
+    case GESTURE_SWITCH_LEFT:     postKeyboardShortcut(kVK_Left) // Ctrl+← 上一桌面/全屏
+    case GESTURE_SWITCH_RIGHT:    postKeyboardShortcut(kVK_Right) // Ctrl+→ 下一桌面/全屏
+    case GESTURE_LAUNCHPAD:
+        // 启动台没有标准快捷键，直接打开 Launchpad 应用
+        if let url = URL(string: "/System/Applications/Launchpad.app") {
+            NSWorkspace.shared.open(url)
+        }
     default: break
     }
 }

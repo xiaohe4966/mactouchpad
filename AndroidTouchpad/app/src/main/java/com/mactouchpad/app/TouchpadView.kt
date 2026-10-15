@@ -60,6 +60,7 @@ class TouchpadView @JvmOverloads constructor(
     private var lastMidX: Float? = null     // 双指滚动上一帧中点
     private var lastMidY: Float? = null
     private var threeGesturePending = false // 曾进入三指模式 → 最后一指抬起触发手势
+    private var threeFingers = 0            // 进入三指模式时的实际手指数（区分三指/四指）
     private var threeStartX = 0f
     private var threeStartY = 0f
     private var threeEndX = 0f
@@ -153,6 +154,7 @@ class TouchpadView @JvmOverloads constructor(
                 rightClickPending = false
                 twoTapPending = false
                 threeGesturePending = true
+                threeFingers = to
                 val (mx, my) = currentMid()
                 threeStartX = mx; threeStartY = my
                 threeEndX = mx; threeEndY = my
@@ -254,8 +256,11 @@ class TouchpadView @JvmOverloads constructor(
                 val dy = threeEndY - threeStartY
                 if (abs(dx) >= gestureSlop || abs(dy) >= gestureSlop) {
                     val id = if (abs(dy) > abs(dx)) {
-                        if (dy < 0) Protocol.GESTURE_MISSION_CONTROL
-                        else Protocol.GESTURE_SHOW_DESKTOP
+                        if (dy < 0) {
+                            // 上滑：三指=调度中心，四指=启动台
+                            if (threeFingers >= 4) Protocol.GESTURE_LAUNCHPAD
+                            else Protocol.GESTURE_MISSION_CONTROL
+                        } else Protocol.GESTURE_SHOW_DESKTOP
                     } else {
                         if (dx < 0) Protocol.GESTURE_SWITCH_LEFT
                         else Protocol.GESTURE_SWITCH_RIGHT
@@ -298,6 +303,7 @@ class TouchpadView @JvmOverloads constructor(
         rightClickPending = false
         twoTapPending = false
         threeGesturePending = false
+        threeFingers = 0
         lastMidX = null; lastMidY = null
         if (buttonDown) {
             buttonDown = false
