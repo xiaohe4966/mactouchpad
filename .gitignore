@@ -11,6 +11,11 @@ AndroidTouchpad/captures/
 
 # 编译产物
 MacTouchpad/touchpad-server
+MacTouchpad/MacTouchpad
+
+# 打包产物（Release 资产）
+MacTouchpad.app/
+*.zip
 
 # 日志
 *.log

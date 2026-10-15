@@ -75,6 +75,15 @@ enum Mouse {
         e.post(tap: .cghidEventTap)
     }
 
+    /// 绝对移动：按给定坐标注入（供平滑注入器使用，避免读取异步更新的光标位置导致丢步）
+    static func moveAbsolute(x: Double, y: Double) {
+        guard let e = CGEvent(mouseEventSource: nil,
+                              mouseType: .mouseMoved,
+                              mouseCursorPosition: CGPoint(x: x, y: y),
+                              mouseButton: .left) else { return }
+        e.post(tap: .cghidEventTap)
+    }
+
     /// 滚动：pixel 单位，wheel1 正值 = 内容向上（自然滚动方向由安卓端换算）
     static func scroll(dx: Int, dy: Int) {
         guard let e = CGEvent(scrollWheelEvent2Source: nil,
@@ -140,6 +149,77 @@ func handleGesture(_ id: Int8) {
     }
 }
 
+// MARK: - 指针平滑注入（把合并包拆成小步连续注入，消除一顿一顿）
+
+final class SmoothMover {
+
+    private let queue = DispatchQueue(label: "mactouchpad.smooth")
+    private var steps: [(sx: Double, sy: Double)] = []
+    private var timer: DispatchSourceTimer?
+    private var running = false
+    /// 自维护的光标位置（CGEvent 注入后读取 currentLocation 有异步延迟，直接维护避免丢步）
+    private var posX: Double?
+    private var posY: Double?
+
+    /// 每个合并包拆成的小步数（配合 2ms tick，指针近似连续移动）
+    private let stepsPerMove = 3
+
+    func start() {
+        queue.async { [self] in
+            guard !self.running else { return }
+            self.running = true
+            let t = DispatchSource.makeTimerSource(queue: self.queue)
+            t.schedule(deadline: .now(), repeating: .milliseconds(2))
+            t.setEventHandler { [weak self] in self?.tick() }
+            t.resume()
+            self.timer = t
+        }
+    }
+
+    /// 收到一个 MOVE 包：拆成小步排队
+    func enqueue(dx: Double, dy: Double) {
+        queue.async { [self] in
+            let n = Double(self.stepsPerMove)
+            for _ in 0..<self.stepsPerMove {
+                self.steps.append((dx / n, dy / n))
+            }
+        }
+    }
+
+    /// 关键动作（点击 / 手势）前调用：把队列剩余位移一次性注入，保证不丢移动、顺序正确
+    func flush() {
+        queue.sync { [self] in
+            var tx = 0.0
+            var ty = 0.0
+            for s in self.steps { tx += s.sx; ty += s.sy }
+            self.steps.removeAll()
+            if tx != 0 || ty != 0 {
+                ensurePos()
+                posX! += tx
+                posY! += ty
+                Mouse.moveAbsolute(x: posX!, y: posY!)
+            }
+        }
+    }
+
+    private func ensurePos() {
+        if posX == nil {
+            let p = Mouse.currentLocation()
+            posX = p.x
+            posY = p.y
+        }
+    }
+
+    private func tick() {
+        guard !steps.isEmpty else { return }
+        let s = steps.removeFirst()
+        ensurePos()
+        posX! += s.sx
+        posY! += s.sy
+        Mouse.moveAbsolute(x: posX!, y: posY!)
+    }
+}
+
 // MARK: - TCP 服务器（Network framework）
 
 final class Server {
@@ -148,6 +228,7 @@ final class Server {
     private var listener: NWListener?
     private var current: NWConnection?
     private var buffer = [UInt8]()   // 粘包缓冲
+    private let mover = SmoothMover()
 
     func start() {
         do {
@@ -162,6 +243,7 @@ final class Server {
             self?.accept(conn)
         }
         listener?.start(queue: queue)
+        mover.start()
         print("✅ MacTouchpad 服务已启动，监听端口 \(SERVER_PORT)（USB / WiFi 均可连接）")
         if let ip = localIPAddress() {
             print("   WiFi 连接：手机 App 设置里选「WiFi」，输入 Mac 地址 \(ip):\(SERVER_PORT)（或点自动发现）")
@@ -267,18 +349,22 @@ final class Server {
         case MSG_MOVE:
             let dx = i16(payload, 1); let dy = i16(payload, 3)
             print("DEBUG 收到 MOVE dx=\(dx) dy=\(dy)")
-            Mouse.move(dx: dx, dy: dy)
+            mover.enqueue(dx: Double(dx), dy: Double(dy))
         case MSG_LEFT_DOWN:
             print("DEBUG 收到 LEFT_DOWN")
+            mover.flush()
             Mouse.leftDown()
         case MSG_LEFT_UP:
             print("DEBUG 收到 LEFT_UP")
+            mover.flush()
             Mouse.leftUp()
         case MSG_RIGHT_DOWN:
             print("DEBUG 收到 RIGHT_DOWN")
+            mover.flush()
             Mouse.rightDown()
         case MSG_RIGHT_UP:
             print("DEBUG 收到 RIGHT_UP")
+            mover.flush()
             Mouse.rightUp()
         case MSG_SCROLL:
             let dx = i16(payload, 1); let dy = i16(payload, 3)
@@ -286,6 +372,7 @@ final class Server {
             Mouse.scroll(dx: dx, dy: dy)
         case MSG_GESTURE:
             print("DEBUG 收到 GESTURE id=\(payload[1])")
+            mover.flush()
             handleGesture(Int8(bitPattern: payload[1]))
         default:
             print("DEBUG 收到未知消息 type=\(type)")
