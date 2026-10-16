@@ -1,0 +1,32 @@
+name: MacTouchpad
+options:
+  bundleIdPrefix: com.mactouchpad
+  deploymentTarget:
+    iOS: "16.0"
+targets:
+  MacTouchpad:
+    type: application
+    platform: iOS
+    sources:
+      - Sources
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: Mac触控板
+        UILaunchScreen: {}
+        UIRequiresFullScreen: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSLocalNetworkUsageDescription: 需要访问本地网络以连接 Mac 触控板服务
+        NSBonjourServices:
+          - _mactouchpad._tcp
+        UIStatusBarHidden: true
+        UIViewControllerBasedStatusBarAppearance: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mactouchpad.ios
+        TARGETED_DEVICE_FAMILY: 1
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: X97MLRS6UR
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: NO

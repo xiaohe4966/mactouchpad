@@ -1,8 +1,8 @@
 # Mac 触控板（Mac Touchpad）
 
-把安卓手机整块屏幕变成 Mac 的触控板：单指移动指针、轻点单击、长按拖拽、双指滚动、双指轻点右键，**三指可拖移也可快滑触发系统手势（调度中心 / 显示桌面 / 切换桌面），四指 / 五指按方向触发系统手势**。
+把手机整块屏幕变成 Mac 的触控板：单指移动指针、轻点单击、长按拖拽、双指滚动、双指轻点右键，**三指可拖移也可快滑触发系统手势（调度中心 / 显示桌面 / 切换桌面），四指 / 五指按方向触发系统手势**。
 
-连接方式：**USB 数据线 + ADB 端口转发**（延迟低、稳定），也支持 **WiFi 局域网直连**（同一 WiFi 下自动发现 Mac，无需数据线）。
+支持 **安卓**（USB 数据线 + ADB 端口转发，延迟低、稳定；也支持 WiFi 局域网直连）与 **iPhone**（WiFi 局域网直连，同网段自动发现）。
 
 ---
 
@@ -12,12 +12,20 @@
 MacTouchpad/
   server.swift         Mac 端服务程序（Swift 单文件，无第三方依赖）
   touchpad-server      编译好的可执行文件（arm64）
+  MacTouchpadApp.swift Mac 端 GUI 服务（双击运行：状态/IP 复制/日志/USB 守护/开机自启）
 AndroidTouchpad/       安卓端工程（Kotlin，Android Studio 可直接打开）
   app/src/main/java/com/mactouchpad/app/
     MainActivity.kt    主界面：全屏触控板 + 连接状态栏
     TouchpadView.kt    手势识别状态机（核心）
-    ConnectionManager.kt  TCP 客户端 + 断线自动重连
+    ConnectionManager.kt TCP 客户端 + 断线自动重连
     Protocol.kt         二进制协议编码
+iOSTouchpad/           iPhone 端工程（SwiftUI + UIKit 多指触摸，Xcode 打开）
+  Sources/
+    MacTouchpadApp.swift 主界面：连接状态 / 旋转 / 灵敏度设置 / IP 记忆自动连接
+    TouchpadView.swift   多指手势识别（与安卓版逻辑一致）
+    Connection.swift     连接层（Bonjour 自动发现 / 手动 IP / 保活）
+    Protocol.swift       二进制协议编码
+  MacTouchpad.xcodeproj  可直接用 Xcode 打开构建
 ```
 
 通信协议（TCP 5907 端口，大端序，每条消息 = 1 字节类型 + 载荷）：
@@ -78,6 +86,36 @@ adb reverse tcp:5907 tcp:5907
 > 注意：App 的 WiFi 地址与连接方式会自动记忆，下次打开直接生效。
 > WiFi 相比 USB 延迟略高，若感觉滑动卡顿，可在设置里适当调低指针灵敏度。
 
+## 四、iPhone 版（iOS，仅 WiFi 模式）
+
+iPhone 与安卓共享同一个 Mac 服务端（协议相同），支持全部手势。**iPhone 只能走 WiFi 局域网连接**（iOS 不允许普通 App 走 USB 转发）。
+
+### 功能
+
+- **自动连接**：连上过一次的 Mac IP 自动记住，下次打开直接自动连接；未连过时自动发现（Bonjour）或手动输 IP
+- **IP 自动填充**：输入框自动填好本机 WiFi 网段前 3 段（如 `192.168.68.`），只需补最后一位
+- **旋转**：右上角「旋转 0°」按钮，点一下顺时针 90°，横握/倒置手机时触摸方向自动适配
+- **灵敏度设置**：右上角「设置」面板，指针 / 滚动 / 三指拖移三项，0.1 步进可调，自动记忆
+- **屏幕常亮**：使用中不自动锁屏
+
+### 构建安装（需要 macOS + Xcode）
+
+```text
+1. 用 Xcode 打开 iOSTouchpad/MacTouchpad.xcodeproj
+2. 选中工程 → Signing & Capabilities → Team 选择自己的 Apple ID（免费账号即可）
+3. 插上 iPhone，顶部选择自己的 iPhone 作为运行设备，点 Run
+4. iPhone 首次运行：设置 → 通用 → VPN与设备管理 → 信任开发者证书
+```
+
+> 免费 Apple ID 签名的 App 有效期 7 天，到期后重新插上电脑点一次 Run 即可续期；
+> 若需要长期分发给他人使用，需付费开发者账号走 TestFlight / Ad Hoc 分发。
+
+### 连接步骤
+
+1. iPhone 与 Mac 连接**同一个 WiFi**（同一路由器，网段一致）
+2. 打开 App：自动发现 Mac，或手动输入 Mac 的 IP（服务端 GUI 窗口右上角可直接复制 IP）点「连接」
+3. 顶部状态变绿「已连接」即可使用，手势与安卓版完全一致（见下方手势对照表）
+
 ---
 
 ## 手势对照表
@@ -131,7 +169,7 @@ adb reverse tcp:5907 tcp:5907
 
 ## 常见问题
 
-- **连不上 / 一直显示重连**：确认 Mac 端服务在运行（终端有「监听端口 5907」输出）；确认 `adb reverse tcp:5907 tcp:5907` 执行成功（可用 `adb reverse --list` 检查）。
+- **连不上 / 一直显示重连**：确认 Mac 端服务在运行（终端有「监听端口 5907」输出）；安卓确认 `adb reverse tcp:5907 tcp:5907` 执行成功（可用 `adb reverse --list` 检查）；iPhone 确认与 Mac 在同一 WiFi 网段。
 - **指针不动，但连接正常**：辅助功能权限未授予，或授权后没有重启服务程序。
 - **三指手势无反应**：先在 Mac 的「系统设置 → 键盘 → 键盘快捷键」确认调度中心（F3）/ 显示桌面（F11）快捷键未被修改。
 - **三指拖拽误判成系统手势**（或反之）：调整 `swipeVelocityDpPerSec` 和 `classifyWindowMs`。慢拖调到更大阈值、更长窗口；快滑则调小。

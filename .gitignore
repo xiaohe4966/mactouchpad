@@ -19,3 +19,6 @@ MacTouchpad.app/
 
 # 日志
 *.log
+
+# Xcode 本地状态
+iOSTouchpad/MacTouchpad.xcodeproj/xcuserdata/
